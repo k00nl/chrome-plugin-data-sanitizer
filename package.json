@@ -1,0 +1,17 @@
+{
+  "name": "image-sanitizer-extension",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/content.ts src/popup.ts --bundle --outdir=dist --target=es2020 --format=iife"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "esbuild": "^0.27.3",
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1"
+  }
+}

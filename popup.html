@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Data sanitizer</title>
+  </head>
+  <body>
+    <div class="card">
+      <div id="count" class="count">Sanitized 0 of your files</div>
+      <div class="title-row">
+        <div class="title">Data sanitizer</div>
+        <button class="help" type="button" aria-label="What gets sanitized?">?</button>
+        <div class="tooltip">
+          <div class="tooltip-title">Sanitizes metadata from</div>
+          <div class="tooltip-list">Images, PDF, DOCX, MP4, MP3</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label">Current site</div>
+        <div id="host" class="host">—</div>
+      </div>
+      <div class="row toggle">
+        <label class="switch">
+          <input id="toggle" type="checkbox" />
+          <span class="slider"></span>
+        </label>
+        <div class="toggle-text">
+          <div class="toggle-title">Sanitize images on this site</div>
+          <div class="toggle-sub">Blocks original images when sanitization fails.</div>
+        </div>
+      </div>
+      <div id="status" class="status"></div>
+      <a class="link" href="https://k00.nl" target="_blank" rel="noreferrer">k00.nl</a>
+    </div>
+    <script src="dist/popup.js"></script>
+  </body>
+</html>
