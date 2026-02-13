@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { PDFDocument, PDFName } from "pdf-lib";
+import { storageLocalGet, storageLocalSet, storageOnChangedAddListener } from "./extension";
 
 type DisabledHosts = Record<string, true>;
 
@@ -14,21 +15,15 @@ let enabledForHost = true;
 const currentHost = window.location.hostname;
 
 async function getDisabledHosts(): Promise<DisabledHosts> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY], (result) => {
-      resolve((result[STORAGE_KEY] as DisabledHosts) || {});
-    });
-  });
+  const result = await storageLocalGet([STORAGE_KEY]);
+  return (result[STORAGE_KEY] as DisabledHosts) || {};
 }
 
 async function incrementSanitizedCount(by: number): Promise<void> {
   if (by <= 0) return;
-  return new Promise((resolve) => {
-    chrome.storage.local.get([COUNT_KEY], (result) => {
-      const current = Number(result[COUNT_KEY] || 0);
-      chrome.storage.local.set({ [COUNT_KEY]: current + by }, () => resolve());
-    });
-  });
+  const result = await storageLocalGet([COUNT_KEY]);
+  const current = Number(result[COUNT_KEY] || 0);
+  await storageLocalSet({ [COUNT_KEY]: current + by });
 }
 
 async function updateEnabledState(): Promise<void> {
@@ -781,7 +776,7 @@ document.addEventListener(
   true
 );
 
-chrome.storage.onChanged.addListener((changes, area) => {
+storageOnChangedAddListener((changes, area) => {
   if (area !== "local") return;
   if (changes[STORAGE_KEY]) {
     updateEnabledState().catch(() => undefined);

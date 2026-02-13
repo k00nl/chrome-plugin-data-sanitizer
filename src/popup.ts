@@ -1,22 +1,21 @@
+import {
+  storageLocalGet,
+  storageLocalSet,
+  storageOnChangedAddListener,
+  tabsQuery
+} from "./extension";
+
 type DisabledHosts = Record<string, true>;
 
 const STORAGE_KEY = "disabledHosts";
 const COUNT_KEY = "sanitizedCount";
-
 function getActiveTab(): Promise<chrome.tabs.Tab | null> {
-  return new Promise((resolve) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      resolve(tabs[0] || null);
-    });
-  });
+  return tabsQuery({ active: true, currentWindow: true }).then((tabs) => tabs[0] || null);
 }
 
 async function getDisabledHosts(): Promise<DisabledHosts> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY], (result) => {
-      resolve((result[STORAGE_KEY] as DisabledHosts) || {});
-    });
-  });
+  const result = await storageLocalGet([STORAGE_KEY]);
+  return (result[STORAGE_KEY] as DisabledHosts) || {};
 }
 
 async function setHostEnabled(host: string, enabled: boolean): Promise<void> {
@@ -26,9 +25,7 @@ async function setHostEnabled(host: string, enabled: boolean): Promise<void> {
   } else {
     disabledHosts[host] = true;
   }
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [STORAGE_KEY]: disabledHosts }, () => resolve());
-  });
+  await storageLocalSet({ [STORAGE_KEY]: disabledHosts });
 }
 
 function setStatus(text: string): void {
@@ -47,9 +44,8 @@ async function init(): Promise<void> {
   const countEl = document.getElementById("count");
   if (!hostEl || !toggle || !countEl) return;
 
-  chrome.storage.local.get([COUNT_KEY], (result) => {
-    setCount(Number(result[COUNT_KEY] || 0));
-  });
+  const countResult = await storageLocalGet([COUNT_KEY]);
+  setCount(Number(countResult[COUNT_KEY] || 0));
 
   const tab = await getActiveTab();
   const url = tab?.url ? new URL(tab.url) : null;
@@ -77,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
   init().catch(() => undefined);
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+storageOnChangedAddListener((changes, area) => {
   if (area !== "local") return;
   if (changes[COUNT_KEY]) {
     setCount(Number(changes[COUNT_KEY].newValue || 0));
