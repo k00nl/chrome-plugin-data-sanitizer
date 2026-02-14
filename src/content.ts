@@ -8,6 +8,7 @@ const STORAGE_KEY = "disabledHosts";
 const COUNT_KEY = "sanitizedCount";
 const SHOW_WATERMARK = true;
 const BANNER_ID = "__image_sanitizer_banner__";
+const FILE_INPUT_HOSTS = new Set(["gemini.google.com", "bard.google.com"]);
 const processingInputs = new WeakSet<HTMLInputElement>();
 const syntheticTransfers = new WeakSet<DataTransfer>();
 
@@ -581,6 +582,66 @@ function setInputFiles(input: HTMLInputElement, files: File[]): void {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function getHost(): string {
+  return window.location.hostname;
+}
+
+function shouldPreferFileInput(): boolean {
+  return FILE_INPUT_HOSTS.has(getHost());
+}
+
+function acceptsFile(input: HTMLInputElement, file: File): boolean {
+  const accept = input.accept?.trim();
+  if (!accept) return true;
+  const tokens = accept
+    .split(",")
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  if (!tokens.length) return true;
+
+  const mime = (file.type || "").toLowerCase();
+  const name = (file.name || "").toLowerCase();
+  return tokens.some((token) => {
+    if (token.startsWith(".")) {
+      return name.endsWith(token);
+    }
+    if (token.endsWith("/*")) {
+      const prefix = token.slice(0, -1);
+      return mime.startsWith(prefix);
+    }
+    return mime === token;
+  });
+}
+
+function findFileInputForFiles(
+  target: EventTarget | null,
+  files: File[]
+): HTMLInputElement | null {
+  const inputs = Array.from(document.querySelectorAll('input[type="file"]')) as HTMLInputElement[];
+  if (!inputs.length) return null;
+
+  const forms: HTMLFormElement[] = [];
+  const targetEl = target as HTMLElement | null;
+  const form = targetEl?.closest?.("form") as HTMLFormElement | null;
+  if (form) forms.push(form);
+
+  const ordered = forms.length
+    ? inputs.filter((input) => input.form && forms.includes(input.form))
+    : inputs.slice();
+
+  const candidates = ordered.length ? ordered : inputs;
+
+  for (const input of candidates) {
+    if (input.disabled) continue;
+    if (!input.multiple && files.length > 1) continue;
+    if (files.every((file) => acceptsFile(input, file))) {
+      return input;
+    }
+  }
+
+  return null;
+}
+
 document.addEventListener(
   "paste",
   async (event) => {
@@ -616,6 +677,21 @@ document.addEventListener(
           sanitizedMp4.length +
           sanitizedMp3.length
       );
+
+      if (shouldPreferFileInput()) {
+        const combined = [
+          ...sanitizedImages,
+          ...sanitizedPdfs,
+          ...sanitizedDocx,
+          ...sanitizedMp4,
+          ...sanitizedMp3
+        ];
+        const fileInput = findFileInputForFiles(event.target, combined);
+        if (fileInput) {
+          setInputFiles(fileInput, combined);
+          return;
+        }
+      }
 
       if (
         isEditableTarget(event.target) &&
