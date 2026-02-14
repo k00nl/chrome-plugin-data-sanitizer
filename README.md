@@ -28,6 +28,7 @@ Implementation uses `pdf-lib`.
 ### DOCX
 DOCX files are ZIP archives. We remove metadata entries:
 - Removes everything under `docProps/`
+- Clears ZIP comments, timestamps, and permissions
 
 Implementation uses `jszip`.
 

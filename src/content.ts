@@ -321,10 +321,17 @@ async function sanitizePdf(file: File): Promise<File> {
 async function sanitizeDocx(file: File): Promise<File> {
   const bytes = await file.arrayBuffer();
   const zip = await JSZip.loadAsync(bytes);
+  zip.comment = "";
   for (const path of Object.keys(zip.files)) {
     if (path.startsWith("docProps/")) {
       zip.remove(path);
+      continue;
     }
+    const entry = zip.files[path];
+    entry.date = new Date(0);
+    entry.comment = "";
+    entry.unixPermissions = null;
+    entry.dosPermissions = null;
   }
   const outBytes = await zip.generateAsync({
     type: "uint8array",
