@@ -4,7 +4,7 @@ Data Sanitizer is a Chrome extension that removes metadata from common file type
 
 ## Supported Files
 - Images: `jpg`, `png`, `webp`, `gif`, `bmp`
-- Documents: `pdf`, `docx` (ZIP metadata stripped)
+- Documents: `pdf`, `docx`, `zip`
 - Media: `mp4`, `mp3`
 
 ## How It Works
