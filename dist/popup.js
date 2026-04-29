@@ -1,21 +1,43 @@
 "use strict";
 (() => {
+  // src/extension.ts
+  var ext = globalThis.browser || globalThis.chrome;
+  var useBrowser = typeof globalThis.browser !== "undefined";
+  function storageLocalGet(keys) {
+    if (!ext?.storage?.local?.get) return Promise.resolve({});
+    if (useBrowser) return ext.storage.local.get(keys);
+    return new Promise((resolve) => {
+      ext.storage.local.get(keys, (result) => resolve(result));
+    });
+  }
+  function storageLocalSet(items) {
+    if (!ext?.storage?.local?.set) return Promise.resolve();
+    if (useBrowser) return ext.storage.local.set(items);
+    return new Promise((resolve) => {
+      ext.storage.local.set(items, () => resolve());
+    });
+  }
+  function tabsQuery(query) {
+    if (!ext?.tabs?.query) return Promise.resolve([]);
+    if (useBrowser) return ext.tabs.query(query);
+    return new Promise((resolve) => {
+      ext.tabs.query(query, (tabs) => resolve(tabs));
+    });
+  }
+  function storageOnChangedAddListener(listener) {
+    if (!ext?.storage?.onChanged?.addListener) return;
+    ext.storage.onChanged.addListener(listener);
+  }
+
   // src/popup.ts
   var STORAGE_KEY = "disabledHosts";
   var COUNT_KEY = "sanitizedCount";
   function getActiveTab() {
-    return new Promise((resolve) => {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        resolve(tabs[0] || null);
-      });
-    });
+    return tabsQuery({ active: true, currentWindow: true }).then((tabs) => tabs[0] || null);
   }
   async function getDisabledHosts() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get([STORAGE_KEY], (result) => {
-        resolve(result[STORAGE_KEY] || {});
-      });
-    });
+    const result = await storageLocalGet([STORAGE_KEY]);
+    return result[STORAGE_KEY] || {};
   }
   async function setHostEnabled(host, enabled) {
     const disabledHosts = await getDisabledHosts();
@@ -24,9 +46,7 @@
     } else {
       disabledHosts[host] = true;
     }
-    return new Promise((resolve) => {
-      chrome.storage.local.set({ [STORAGE_KEY]: disabledHosts }, () => resolve());
-    });
+    await storageLocalSet({ [STORAGE_KEY]: disabledHosts });
   }
   function setStatus(text) {
     const el = document.getElementById("status");
@@ -34,16 +54,15 @@
   }
   function setCount(count) {
     const el = document.getElementById("count");
-    if (el) el.textContent = `Sanitized ${count} of your files`;
+    if (el) el.textContent = String(count);
   }
   async function init() {
     const hostEl = document.getElementById("host");
     const toggle = document.getElementById("toggle");
     const countEl = document.getElementById("count");
     if (!hostEl || !toggle || !countEl) return;
-    chrome.storage.local.get([COUNT_KEY], (result) => {
-      setCount(Number(result[COUNT_KEY] || 0));
-    });
+    const countResult = await storageLocalGet([COUNT_KEY]);
+    setCount(Number(countResult[COUNT_KEY] || 0));
     const tab = await getActiveTab();
     const url = tab?.url ? new URL(tab.url) : null;
     if (!url || !url.hostname) {
@@ -65,7 +84,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     init().catch(() => void 0);
   });
-  chrome.storage.onChanged.addListener((changes, area) => {
+  storageOnChangedAddListener((changes, area) => {
     if (area !== "local") return;
     if (changes[COUNT_KEY]) {
       setCount(Number(changes[COUNT_KEY].newValue || 0));

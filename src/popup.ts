@@ -35,7 +35,7 @@ function setStatus(text: string): void {
 
 function setCount(count: number): void {
   const el = document.getElementById("count");
-  if (el) el.textContent = `Sanitized ${count} of your files`;
+  if (el) el.textContent = String(count);
 }
 
 async function init(): Promise<void> {

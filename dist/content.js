@@ -22012,6 +22012,28 @@
   );
   var PDFButton_default = PDFButton;
 
+  // src/extension.ts
+  var ext = globalThis.browser || globalThis.chrome;
+  var useBrowser = typeof globalThis.browser !== "undefined";
+  function storageLocalGet(keys) {
+    if (!ext?.storage?.local?.get) return Promise.resolve({});
+    if (useBrowser) return ext.storage.local.get(keys);
+    return new Promise((resolve) => {
+      ext.storage.local.get(keys, (result) => resolve(result));
+    });
+  }
+  function storageLocalSet(items) {
+    if (!ext?.storage?.local?.set) return Promise.resolve();
+    if (useBrowser) return ext.storage.local.set(items);
+    return new Promise((resolve) => {
+      ext.storage.local.set(items, () => resolve());
+    });
+  }
+  function storageOnChangedAddListener(listener) {
+    if (!ext?.storage?.onChanged?.addListener) return;
+    ext.storage.onChanged.addListener(listener);
+  }
+
   // src/content.ts
   var STORAGE_KEY = "disabledHosts";
   var COUNT_KEY = "sanitizedCount";
@@ -22022,20 +22044,14 @@
   var enabledForHost = true;
   var currentHost = window.location.hostname;
   async function getDisabledHosts() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get([STORAGE_KEY], (result) => {
-        resolve(result[STORAGE_KEY] || {});
-      });
-    });
+    const result = await storageLocalGet([STORAGE_KEY]);
+    return result[STORAGE_KEY] || {};
   }
   async function incrementSanitizedCount(by) {
     if (by <= 0) return;
-    return new Promise((resolve) => {
-      chrome.storage.local.get([COUNT_KEY], (result) => {
-        const current = Number(result[COUNT_KEY] || 0);
-        chrome.storage.local.set({ [COUNT_KEY]: current + by }, () => resolve());
-      });
-    });
+    const result = await storageLocalGet([COUNT_KEY]);
+    const current = Number(result[COUNT_KEY] || 0);
+    await storageLocalSet({ [COUNT_KEY]: current + by });
   }
   async function updateEnabledState() {
     const disabledHosts = await getDisabledHosts();
@@ -22061,66 +22077,53 @@
     }
     banner.textContent = message;
     banner.style.background = type === "error" ? "#b00020" : "#111";
-    window.setTimeout(() => {
-      banner?.remove();
-    }, 5e3);
+    window.setTimeout(() => banner?.remove(), 5e3);
   }
-  function isEditableTarget(target) {
-    const el = target;
-    if (!el) return false;
-    if (el.isContentEditable) return true;
-    return !!el.closest?.('[contenteditable="true"]');
+  function isPdfFile(file) {
+    if (file.type === "application/pdf") return true;
+    return file.name.toLowerCase().endsWith(".pdf");
   }
-  function getImageFilesFromClipboard(items) {
-    if (!items) return [];
-    const files = [];
-    for (const item of Array.from(items)) {
-      if (item.kind === "file" && item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) files.push(file);
-      }
+  function isDocxFile(file) {
+    if (file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      return true;
     }
-    return files;
+    return file.name.toLowerCase().endsWith(".docx");
   }
-  function getPdfFilesFromClipboard(items) {
-    if (!items) return [];
-    const files = [];
-    for (const item of Array.from(items)) {
-      if (item.kind !== "file") continue;
-      const file = item.getAsFile();
-      if (file && isPdfFile(file)) files.push(file);
+  function isMp4File(file) {
+    if (file.type === "video/mp4") return true;
+    return file.name.toLowerCase().endsWith(".mp4");
+  }
+  function isMp3File(file) {
+    if (file.type === "audio/mpeg") return true;
+    return file.name.toLowerCase().endsWith(".mp3");
+  }
+  function isImageFile(file) {
+    return file.type.startsWith("image/");
+  }
+  function categorizeFiles(files) {
+    const result = { images: [], pdfs: [], docx: [], mp4: [], mp3: [], other: [] };
+    for (const file of files) {
+      if (isImageFile(file)) result.images.push(file);
+      else if (isPdfFile(file)) result.pdfs.push(file);
+      else if (isDocxFile(file)) result.docx.push(file);
+      else if (isMp4File(file)) result.mp4.push(file);
+      else if (isMp3File(file)) result.mp3.push(file);
+      else result.other.push(file);
     }
-    return files;
+    return result;
   }
-  function getDocxFilesFromClipboard(items) {
-    if (!items) return [];
-    const files = [];
-    for (const item of Array.from(items)) {
-      if (item.kind !== "file") continue;
-      const file = item.getAsFile();
-      if (file && isDocxFile(file)) files.push(file);
-    }
-    return files;
+  function totalSanitizableCount(c) {
+    return c.images.length + c.pdfs.length + c.docx.length + c.mp4.length + c.mp3.length;
   }
-  function getMp4FilesFromClipboard(items) {
+  function filesFromClipboard(items) {
     if (!items) return [];
-    const files = [];
+    const out = [];
     for (const item of Array.from(items)) {
       if (item.kind !== "file") continue;
       const file = item.getAsFile();
-      if (file && isMp4File(file)) files.push(file);
+      if (file) out.push(file);
     }
-    return files;
-  }
-  function getMp3FilesFromClipboard(items) {
-    if (!items) return [];
-    const files = [];
-    for (const item of Array.from(items)) {
-      if (item.kind !== "file") continue;
-      const file = item.getAsFile();
-      if (file && isMp3File(file)) files.push(file);
-    }
-    return files;
+    return out;
   }
   function getExtensionForMime(mime) {
     switch (mime) {
@@ -22148,50 +22151,31 @@
   }
   function safeFilename(originalName, mime) {
     if (originalName && originalName.trim()) return originalName;
-    const ext = getExtensionForMime(mime);
+    const ext2 = getExtensionForMime(mime);
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    return `sanitized-${stamp}.${ext}`;
+    return `sanitized-${stamp}.${ext2}`;
   }
-  function isPdfFile(file) {
-    if (file.type === "application/pdf") return true;
-    return file.name.toLowerCase().endsWith(".pdf");
-  }
-  function isDocxFile(file) {
-    if (file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      return true;
-    }
-    return file.name.toLowerCase().endsWith(".docx");
-  }
-  function isMp4File(file) {
-    if (file.type === "video/mp4") return true;
-    return file.name.toLowerCase().endsWith(".mp4");
-  }
-  function isMp3File(file) {
-    if (file.type === "audio/mpeg") return true;
-    return file.name.toLowerCase().endsWith(".mp3");
+  function drawWatermark(ctx) {
+    if (!SHOW_WATERMARK) return;
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.font = "10px Arial, sans-serif";
+    ctx.fillStyle = "#000";
+    ctx.textBaseline = "top";
+    ctx.fillText("sanitized", 6, 4);
+    ctx.restore();
   }
   async function imageToBlob(bitmap, mime) {
-    const canvasSupported = "OffscreenCanvas" in window;
     const width = bitmap.width;
     const height = bitmap.height;
-    if (canvasSupported) {
+    const quality = mime === "image/jpeg" || mime === "image/webp" ? 0.92 : void 0;
+    if ("OffscreenCanvas" in window) {
       const canvas2 = new OffscreenCanvas(width, height);
       const ctx2 = canvas2.getContext("2d", { alpha: true });
       if (!ctx2) throw new Error("No 2d context");
       ctx2.drawImage(bitmap, 0, 0);
-      if (SHOW_WATERMARK) {
-        ctx2.save();
-        ctx2.globalAlpha = 0.18;
-        ctx2.font = "10px Arial, sans-serif";
-        ctx2.fillStyle = "#000";
-        ctx2.textBaseline = "top";
-        ctx2.fillText("sanitized", 6, 4);
-        ctx2.restore();
-      }
-      return canvas2.convertToBlob({
-        type: mime || "image/png",
-        quality: mime === "image/jpeg" || mime === "image/webp" ? 0.92 : void 0
-      });
+      drawWatermark(ctx2);
+      return canvas2.convertToBlob({ type: mime || "image/png", quality });
     }
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -22199,35 +22183,20 @@
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) throw new Error("No 2d context");
     ctx.drawImage(bitmap, 0, 0);
-    if (SHOW_WATERMARK) {
-      ctx.save();
-      ctx.globalAlpha = 0.18;
-      ctx.font = "10px Arial, sans-serif";
-      ctx.fillStyle = "#000";
-      ctx.textBaseline = "top";
-      ctx.fillText("sanitized", 6, 4);
-      ctx.restore();
-    }
+    drawWatermark(ctx);
     return new Promise((resolve, reject) => {
       canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error("Failed to create blob"));
-            return;
-          }
-          resolve(blob);
-        },
+        (blob) => blob ? resolve(blob) : reject(new Error("Failed to create blob")),
         mime || "image/png",
-        mime === "image/jpeg" || mime === "image/webp" ? 0.92 : void 0
+        quality
       );
     });
   }
-  async function sanitizeFile(file) {
+  async function sanitizeImage(file) {
     const mime = file.type || "image/png";
     const bitmap = await createImageBitmap(file);
     const blob = await imageToBlob(bitmap, mime);
-    const name = safeFilename(file.name, mime);
-    return new File([blob], name, {
+    return new File([blob], safeFilename(file.name, mime), {
       type: blob.type || mime,
       lastModified: Date.now()
     });
@@ -22244,9 +22213,7 @@
       if (infoRef && anyDoc.context?.lookup) {
         const infoDict = anyDoc.context.lookup(infoRef);
         const keys = infoDict?.keys?.() || [];
-        for (const key of keys) {
-          infoDict?.delete?.(key);
-        }
+        for (const key of keys) infoDict?.delete?.(key);
       }
       trailerInfo.Info = void 0;
       trailerInfo.ID = void 0;
@@ -22260,8 +22227,7 @@
     });
     stripPdfMetadata(pdfDoc);
     const pdfBytes = await pdfDoc.save();
-    const name = safeFilename(file.name, "application/pdf");
-    return new File([pdfBytes], name, {
+    return new File([pdfBytes], safeFilename(file.name, "application/pdf"), {
       type: "application/pdf",
       lastModified: Date.now()
     });
@@ -22269,21 +22235,22 @@
   async function sanitizeDocx(file) {
     const bytes = await file.arrayBuffer();
     const zip = await import_jszip.default.loadAsync(bytes);
+    zip.comment = "";
     for (const path of Object.keys(zip.files)) {
       if (path.startsWith("docProps/")) {
         zip.remove(path);
+        continue;
       }
+      const entry = zip.files[path];
+      entry.date = /* @__PURE__ */ new Date(0);
+      entry.comment = "";
+      entry.unixPermissions = null;
+      entry.dosPermissions = null;
     }
-    const outBytes = await zip.generateAsync({
-      type: "uint8array",
-      compression: "DEFLATE"
-    });
-    const name = safeFilename(
-      file.name,
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    );
-    return new File([outBytes], name, {
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    const outBytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    return new File([outBytes], safeFilename(file.name, docxMime), {
+      type: docxMime,
       lastModified: Date.now()
     });
   }
@@ -22378,8 +22345,7 @@
   async function sanitizeMp4(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const cleaned = concatChunks(parseMp4Boxes(bytes, 0, bytes.length));
-    const name = safeFilename(file.name, "video/mp4");
-    return new File([cleaned], name, {
+    return new File([cleaned], safeFilename(file.name, "video/mp4"), {
       type: "video/mp4",
       lastModified: Date.now()
     });
@@ -22421,16 +22387,26 @@
     bytes = stripId3v2(bytes);
     bytes = stripApeTag(bytes);
     bytes = stripId3v1(bytes);
-    const name = safeFilename(file.name, "audio/mpeg");
-    return new File([bytes], name, {
+    return new File([bytes], safeFilename(file.name, "audio/mpeg"), {
       type: "audio/mpeg",
       lastModified: Date.now()
     });
   }
-  function insertImagesAtCursor(dataUrls) {
-    for (const url of dataUrls) {
-      document.execCommand("insertImage", false, url);
-    }
+  async function sanitizeCategorized(c) {
+    const [images, pdfs, docx, mp4, mp3] = await Promise.all([
+      Promise.all(c.images.map(sanitizeImage)),
+      Promise.all(c.pdfs.map(sanitizePdf)),
+      Promise.all(c.docx.map(sanitizeDocx)),
+      Promise.all(c.mp4.map(sanitizeMp4)),
+      Promise.all(c.mp3.map(sanitizeMp3))
+    ]);
+    return [...images, ...pdfs, ...docx, ...mp4, ...mp3];
+  }
+  function setInputFiles(input, files) {
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
   }
   function tryDispatchPaste(target, files) {
     try {
@@ -22464,61 +22440,32 @@
       return false;
     }
   }
-  function setInputFiles(input, files) {
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(f);
-    input.files = dt.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+  function deliverFiles(target, files, mode) {
+    if (!files.length) return true;
+    if (mode === "drop" && target instanceof HTMLInputElement && target.type === "file") {
+      setInputFiles(target, files);
+      return true;
+    }
+    return mode === "paste" ? tryDispatchPaste(target, files) : tryDispatchDrop(target, files);
   }
   document.addEventListener(
     "paste",
     async (event) => {
       if (!enabledForHost) return;
       if (event.clipboardData && syntheticTransfers.has(event.clipboardData)) return;
-      const imageFiles = getImageFilesFromClipboard(event.clipboardData?.items || null);
-      const pdfFiles = getPdfFilesFromClipboard(event.clipboardData?.items || null);
-      const docxFiles = getDocxFilesFromClipboard(event.clipboardData?.items || null);
-      const mp4Files = getMp4FilesFromClipboard(event.clipboardData?.items || null);
-      const mp3Files = getMp3FilesFromClipboard(event.clipboardData?.items || null);
-      if (!imageFiles.length && !pdfFiles.length && !docxFiles.length && !mp4Files.length && !mp3Files.length)
-        return;
+      const cat = categorizeFiles(filesFromClipboard(event.clipboardData?.items || null));
+      if (!totalSanitizableCount(cat)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       try {
-        const sanitizedImages = await Promise.all(imageFiles.map(sanitizeFile));
-        const sanitizedPdfs = await Promise.all(pdfFiles.map(sanitizePdf));
-        const sanitizedDocx = await Promise.all(docxFiles.map(sanitizeDocx));
-        const sanitizedMp4 = await Promise.all(mp4Files.map(sanitizeMp4));
-        const sanitizedMp3 = await Promise.all(mp3Files.map(sanitizeMp3));
-        await incrementSanitizedCount(
-          sanitizedImages.length + sanitizedPdfs.length + sanitizedDocx.length + sanitizedMp4.length + sanitizedMp3.length
-        );
-        if (isEditableTarget(event.target) && !sanitizedPdfs.length && !sanitizedDocx.length && !sanitizedMp4.length && !sanitizedMp3.length) {
-          const dataUrls = [];
-          for (const file of sanitizedImages) {
-            const reader = new FileReader();
-            const url = await new Promise((resolve, reject) => {
-              reader.onload = () => resolve(String(reader.result));
-              reader.onerror = () => reject(new Error("Failed to read sanitized image"));
-              reader.readAsDataURL(file);
-            });
-            dataUrls.push(url);
-          }
-          insertImagesAtCursor(dataUrls);
-          return;
-        }
-        const dispatched = tryDispatchPaste(event.target, [
-          ...sanitizedImages,
-          ...sanitizedPdfs,
-          ...sanitizedDocx,
-          ...sanitizedMp4,
-          ...sanitizedMp3
-        ]);
-        if (!dispatched) {
-          showBanner("Image sanitizer: paste blocked (could not inject sanitized image).", "error");
+        const sanitized = await sanitizeCategorized(cat);
+        await incrementSanitizedCount(sanitized.length);
+        const ok = deliverFiles(event.target, sanitized, "paste");
+        if (!ok) {
+          showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
         }
       } catch {
-        showBanner("Image sanitizer: paste blocked (failed to sanitize image).", "error");
+        showBanner("K00 Sanitizer: paste geblokkeerd (sanitizen mislukt).", "error");
       }
     },
     true
@@ -22529,46 +22476,20 @@
       if (!enabledForHost) return;
       if (event.dataTransfer && syntheticTransfers.has(event.dataTransfer)) return;
       const allFiles = Array.from(event.dataTransfer?.files || []);
-      const imageFiles = allFiles.filter((f) => f.type.startsWith("image/"));
-      const pdfFiles = allFiles.filter((f) => isPdfFile(f));
-      const docxFiles = allFiles.filter((f) => isDocxFile(f));
-      const mp4Files = allFiles.filter((f) => isMp4File(f));
-      const mp3Files = allFiles.filter((f) => isMp3File(f));
-      if (!imageFiles.length && !pdfFiles.length && !docxFiles.length && !mp4Files.length && !mp3Files.length)
-        return;
+      const cat = categorizeFiles(allFiles);
+      if (!totalSanitizableCount(cat)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       try {
-        const sanitizedImages = await Promise.all(imageFiles.map(sanitizeFile));
-        const sanitizedPdfs = await Promise.all(pdfFiles.map(sanitizePdf));
-        const sanitizedDocx = await Promise.all(docxFiles.map(sanitizeDocx));
-        const sanitizedMp4 = await Promise.all(mp4Files.map(sanitizeMp4));
-        const sanitizedMp3 = await Promise.all(mp3Files.map(sanitizeMp3));
-        await incrementSanitizedCount(
-          sanitizedImages.length + sanitizedPdfs.length + sanitizedDocx.length + sanitizedMp4.length + sanitizedMp3.length
-        );
-        const nonImages = allFiles.filter(
-          (f) => !f.type.startsWith("image/") && !isPdfFile(f) && !isDocxFile(f) && !isMp4File(f) && !isMp3File(f)
-        );
-        const combined = [
-          ...nonImages,
-          ...sanitizedImages,
-          ...sanitizedPdfs,
-          ...sanitizedDocx,
-          ...sanitizedMp4,
-          ...sanitizedMp3
-        ];
-        const target = event.target;
-        if (target && target instanceof HTMLInputElement && target.type === "file") {
-          setInputFiles(target, combined);
-          return;
-        }
-        const dispatched = tryDispatchDrop(event.target, combined);
-        if (!dispatched) {
-          showBanner("Image sanitizer: drop blocked (could not inject sanitized image).", "error");
+        const sanitized = await sanitizeCategorized(cat);
+        await incrementSanitizedCount(sanitized.length);
+        const combined = [...cat.other, ...sanitized];
+        const ok = deliverFiles(event.target, combined, "drop");
+        if (!ok) {
+          showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
         }
       } catch {
-        showBanner("Image sanitizer: drop blocked (failed to sanitize image).", "error");
+        showBanner("K00 Sanitizer: drop geblokkeerd (sanitizen mislukt).", "error");
       }
     },
     true
@@ -22578,52 +22499,27 @@
     async (event) => {
       if (!enabledForHost) return;
       const target = event.target;
-      if (!target || !(target instanceof HTMLInputElement)) return;
-      if (target.type !== "file") return;
+      if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
       if (processingInputs.has(target)) return;
-      const files = Array.from(target.files || []);
-      const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-      const pdfFiles = files.filter((f) => isPdfFile(f));
-      const docxFiles = files.filter((f) => isDocxFile(f));
-      const mp4Files = files.filter((f) => isMp4File(f));
-      const mp3Files = files.filter((f) => isMp3File(f));
-      if (!imageFiles.length && !pdfFiles.length && !docxFiles.length && !mp4Files.length && !mp3Files.length)
-        return;
+      const cat = categorizeFiles(Array.from(target.files || []));
+      if (!totalSanitizableCount(cat)) return;
       processingInputs.add(target);
       try {
-        const sanitizedImages = await Promise.all(imageFiles.map(sanitizeFile));
-        const sanitizedPdfs = await Promise.all(pdfFiles.map(sanitizePdf));
-        const sanitizedDocx = await Promise.all(docxFiles.map(sanitizeDocx));
-        const sanitizedMp4 = await Promise.all(mp4Files.map(sanitizeMp4));
-        const sanitizedMp3 = await Promise.all(mp3Files.map(sanitizeMp3));
-        await incrementSanitizedCount(
-          sanitizedImages.length + sanitizedPdfs.length + sanitizedDocx.length + sanitizedMp4.length + sanitizedMp3.length
-        );
-        const nonImages = files.filter(
-          (f) => !f.type.startsWith("image/") && !isPdfFile(f) && !isDocxFile(f) && !isMp4File(f) && !isMp3File(f)
-        );
-        setInputFiles(target, [
-          ...nonImages,
-          ...sanitizedImages,
-          ...sanitizedPdfs,
-          ...sanitizedDocx,
-          ...sanitizedMp4,
-          ...sanitizedMp3
-        ]);
+        const sanitized = await sanitizeCategorized(cat);
+        await incrementSanitizedCount(sanitized.length);
+        setInputFiles(target, [...cat.other, ...sanitized]);
       } catch {
         target.value = "";
-        showBanner("Image sanitizer: upload blocked (failed to sanitize selected image).", "error");
+        showBanner("K00 Sanitizer: upload geblokkeerd (sanitizen mislukt).", "error");
       } finally {
         processingInputs.delete(target);
       }
     },
     true
   );
-  chrome.storage.onChanged.addListener((changes, area) => {
+  storageOnChangedAddListener((changes, area) => {
     if (area !== "local") return;
-    if (changes[STORAGE_KEY]) {
-      updateEnabledState().catch(() => void 0);
-    }
+    if (changes[STORAGE_KEY]) updateEnabledState().catch(() => void 0);
   });
   updateEnabledState().catch(() => void 0);
 })();

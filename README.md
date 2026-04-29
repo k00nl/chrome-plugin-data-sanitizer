@@ -1,68 +1,64 @@
-# Data Sanitizer Chrome Extension
+# K00 Sanitizer
 
-Data Sanitizer is a Chrome extension that removes metadata from common file types during paste, drag-and-drop, and file input uploads. It prioritizes privacy by stripping embedded metadata while preserving the original filename.
+Browser-extensie die metadata uit bestanden haalt op het moment dat je ze in een website plakt, sleept of upload. Werkt in Chrome en Firefox.
 
-## Supported Files
-- Images: `jpg`, `png`, `webp`, `gif`, `bmp`
-- Documents: `pdf`, `docx`, `zip`
+## Wat het doet
+
+Plak je een foto in Gmail, sleep je een PDF naar Slack, of upload je een filmpje via een formulier. Voordat het bestand de site bereikt vangt de extensie het af, strip de metadata, en geeft de schone versie door. De site merkt het verschil niet.
+
+Geen browser-plaatje als preview. Geen "verzonden via". De site krijgt het bestand zoals het hoort.
+
+## Welke bestanden
+
+- Afbeeldingen: `jpg`, `png`, `webp`, `gif`, `bmp`
+- Documenten: `pdf`, `docx`
 - Media: `mp4`, `mp3`
 
-## How It Works
+## Hoe
 
-### Images
-Images are decoded into pixels and re-encoded to a new file:
-- Decode with `createImageBitmap`
-- Draw to `OffscreenCanvas` or `<canvas>`
-- Re-encode as a new image blob
+### Afbeeldingen
 
-This removes EXIF and embedded metadata.
+Decoderen naar pixels, opnieuw encoderen. EXIF en GPS gaan eruit omdat ze nooit in de pixels zitten. We gebruiken `createImageBitmap` plus `OffscreenCanvas`.
 
 ### PDF
-PDFs are parsed and re-saved with metadata removed:
-- Removes the document Info dictionary
-- Removes the document ID
-- Removes XMP metadata (`/Metadata` in the catalog)
 
-Implementation uses `pdf-lib`.
+We laden de PDF met `pdf-lib`, gooien de Info-dictionary weg, halen de document-ID weg, en verwijderen de XMP-metadata uit de catalog.
 
 ### DOCX
-DOCX files are ZIP archives. We remove metadata entries:
-- Removes everything under `docProps/`
-- Clears ZIP comments, timestamps, and permissions
 
-Implementation uses `jszip`.
+Een DOCX is een ZIP. We slopen alles onder `docProps/`, leeg de ZIP-comments, en zetten alle timestamps op nul. Met `jszip`.
 
 ### MP4
-MP4 files are ISO Base Media File Format containers. We remove metadata atoms:
-- Removes `udta`, `meta`, and `ilst` boxes anywhere in the box tree
 
-This covers common location tags such as `com.apple.quicktime.location.ISO6709` when stored in metadata atoms.
+MP4 is een boomstructuur van boxes. We parsen de boomstructuur en verwijderen elke `udta`, `meta` en `ilst`-box. Daar zitten dingen in als locatiegegevens van je telefoon.
 
 ### MP3
-MP3 metadata is stripped by removing standard tag blocks:
-- Removes ID3v2 (header at start)
-- Removes APEv2 (footer at end)
-- Removes ID3v1 (last 128 bytes)
 
-## Where It Runs
-The sanitizer runs on:
-- Clipboard paste
-- Drag-and-drop
-- File input change events
+We strippen drie tag-blokken. ID3v2 aan het begin, APEv2 aan het einde, ID3v1 in de laatste 128 bytes.
 
-If sanitization fails, the original file is blocked from being inserted.
+## Waar het werkt
+
+De extensie luistert op drie events:
+- `paste` (ctrl+v of cmd+v)
+- `drop` (slepen)
+- `change` op een file-input
+
+De schone bestanden worden teruggegeven via een synthetisch event op dezelfde target. Daardoor pakt de site het op alsof je zelf een schoon bestand had geplakt of gesleept. Werkt op Gemini, ChatGPT, Claude.ai, Gmail, Slack en de rest.
+
+Lukt sanitizen niet, dan wordt het bestand niet geplaatst en zie je een banner.
 
 ## Build
-The project bundles content scripts with `esbuild`.
 
 ```bash
 npm install
 npm run build
 ```
 
-Output is written to `dist/`.
+De gebundelde scripts staan in `dist/`. Laad de map als unpacked extensie via `chrome://extensions`.
 
-## Notes
-- Filenames are preserved; timestamps are reset to the current time.
-- Some container-level fields may still exist (e.g., file system timestamps or codec parameters).
-- The extension does not alter visible content; it only removes metadata.
+## Beperkingen
+
+- Bestandsnamen blijven zoals ze waren. Wil je die ook verbergen, hernoem dan zelf.
+- Timestamps worden op het huidige moment gezet, niet op nul. Sommige sites kijken daar niet naar, andere wel.
+- Container-velden zoals codec-parameters of frame-rate blijven staan. Daar zit geen persoonlijke info in.
+- We raken de pixels of de inhoud van de pagina niet aan. Alleen metadata.
