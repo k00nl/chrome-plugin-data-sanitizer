@@ -1,6 +1,6 @@
 # K00 Sanitizer
 
-Browser-extensie die metadata uit bestanden haalt op het moment dat je ze in een website plakt, sleept of upload. Werkt in Chrome en Firefox.
+Browser-extensie die metadata uit bestanden haalt op het moment dat je ze in een website plakt, sleept of upload. Werkt in elke Chromium-browser (Chrome, Brave, Edge, Opera, Arc) en in Firefox.
 
 ## Wat het doet
 
