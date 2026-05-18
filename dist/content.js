@@ -524,22 +524,26 @@
       showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
     }
   }
-  async function onChange(event) {
+  function onChange(event) {
     if (stale() || !enabledForHost) return;
     const target = event.target;
     if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
     if (processingInputs.has(target)) return;
     const cat = categorizeFiles(Array.from(target.files || []));
     if (!totalSanitizableCount(cat)) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
     processingInputs.add(target);
-    try {
-      const { files, failures } = await sanitizeAll(cat);
-      await incrementSanitizedCount(files.length);
-      reportFailures(failures);
-      setInputFiles(target, [...cat.other, ...files]);
-    } finally {
-      processingInputs.delete(target);
-    }
+    void (async () => {
+      try {
+        const { files, failures } = await sanitizeAll(cat);
+        reportFailures(failures);
+        await incrementSanitizedCount(files.length);
+        setInputFiles(target, [...cat.other, ...files]);
+      } finally {
+        processingInputs.delete(target);
+      }
+    })();
   }
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("drop", onDrop, true);

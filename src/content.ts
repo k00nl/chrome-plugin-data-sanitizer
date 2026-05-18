@@ -577,7 +577,7 @@ async function onDrop(event: DragEvent): Promise<void> {
   }
 }
 
-async function onChange(event: Event): Promise<void> {
+function onChange(event: Event): void {
   if (stale() || !enabledForHost) return;
   const target = event.target;
   if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
@@ -586,15 +586,26 @@ async function onChange(event: Event): Promise<void> {
   const cat = categorizeFiles(Array.from(target.files || []));
   if (!totalSanitizableCount(cat)) return;
 
+  // Synchroon stoppen zodat de pagina het originele bestand nooit ziet. Het
+  // schonen is async, dus zonder dit leest een site (zoals jimpl) het ruwe
+  // bestand mét metadata voordat onze schone versie klaar is.
+  event.stopImmediatePropagation();
+  event.preventDefault();
+
   processingInputs.add(target);
-  try {
-    const { files, failures } = await sanitizeAll(cat);
-    await incrementSanitizedCount(files.length);
-    reportFailures(failures);
-    setInputFiles(target, [...cat.other, ...files]);
-  } finally {
-    processingInputs.delete(target);
-  }
+  void (async () => {
+    try {
+      const { files, failures } = await sanitizeAll(cat);
+      reportFailures(failures);
+      await incrementSanitizedCount(files.length);
+      // setInputFiles dispatcht een nieuw change-event. De processingInputs-
+      // guard hierboven zorgt dat we daar niet opnieuw op inhaken, zodat de
+      // pagina dat event met de schone bestanden gewoon afhandelt.
+      setInputFiles(target, [...cat.other, ...files]);
+    } finally {
+      processingInputs.delete(target);
+    }
+  })();
 }
 
 document.addEventListener("paste", onPaste, true);
