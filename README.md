@@ -20,6 +20,8 @@ Geen browser-plaatje als preview. Geen "verzonden via". De site krijgt het besta
 
 Decoderen naar pixels, opnieuw encoderen. EXIF en GPS gaan eruit omdat ze nooit in de pixels zitten. We gebruiken `createImageBitmap` plus `OffscreenCanvas`.
 
+HEIC (iPhone-foto's) kan de browser zelf niet decoderen. Zo'n bestand wordt niet stiekem doorgelaten met GPS er nog in. Het wordt geblokkeerd en je krijgt een melding. Andere bestanden in dezelfde plak- of sleepactie gaan gewoon door.
+
 ### PDF
 
 We laden de PDF met `pdf-lib`, gooien de Info-dictionary weg, halen de document-ID weg, en verwijderen de XMP-metadata uit de catalog.
@@ -30,7 +32,7 @@ Een DOCX is een ZIP. We slopen alles onder `docProps/`, leeg de ZIP-comments, en
 
 ### MP4
 
-MP4 is een boomstructuur van boxes. We parsen de boomstructuur en verwijderen elke `udta`, `meta` en `ilst`-box. Daar zitten dingen in als locatiegegevens van je telefoon.
+MP4 is een boomstructuur van boxes. We parsen die en verwijderen elke `udta`, `meta`, `ilst` en `uuid`-box. Daarnaast gooien we de hele metadata-track weg (een trak met handler `meta`). Daar bewaart een iPhone de GPS-route van een filmpje, los van de tags.
 
 ### MP3
 
@@ -45,7 +47,9 @@ De extensie luistert op drie events:
 
 De schone bestanden worden teruggegeven via een synthetisch event op dezelfde target. Daardoor pakt de site het op alsof je zelf een schoon bestand had geplakt of gesleept. Werkt op Gemini, ChatGPT, Claude.ai, Gmail, Slack en de rest.
 
-Lukt sanitizen niet, dan wordt het bestand niet geplaatst en zie je een banner.
+Elk bestand wordt los geschoond. Faalt er één, dan wordt alleen die geblokkeerd met een melding. De rest gaat door.
+
+`pdf-lib` en `jszip` zijn samen bijna een megabyte. Die laden niet mee op elke pagina. Ze worden pas opgehaald zodra je echt een PDF of DOCX plakt of sleept. Op alle andere pagina's draait alleen een script van een paar kilobyte.
 
 ## Build
 
@@ -54,7 +58,7 @@ npm install
 npm run build
 ```
 
-De gebundelde scripts staan in `dist/`. Laad de map als unpacked extensie via `chrome://extensions`.
+Of draai `build.cmd`. Dat bouwt alles en zet een kant-en-klare map plus zip in `build/`. Laad `build/k00-sanitizer` via `chrome://extensions` met "Uitgepakte extensie laden", of deel de zip.
 
 ## Beperkingen
 

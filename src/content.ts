@@ -1,12 +1,19 @@
-import JSZip from "jszip";
-import { PDFDocument, PDFName } from "pdf-lib";
-import { storageLocalGet, storageLocalSet, storageOnChangedAddListener } from "./extension";
+import {
+  runtimeGetURL,
+  storageLocalGet,
+  storageLocalSet,
+  storageOnChangedAddListener
+} from "./extension";
 
 type DisabledHosts = Record<string, true>;
 
+interface HeavyModule {
+  sanitizePdf(file: File): Promise<File>;
+  sanitizeDocx(file: File): Promise<File>;
+}
+
 const STORAGE_KEY = "disabledHosts";
 const COUNT_KEY = "sanitizedCount";
-const SHOW_WATERMARK = true;
 const BANNER_ID = "__k00_sanitizer_banner__";
 
 const processingInputs = new WeakSet<HTMLInputElement>();
@@ -14,6 +21,19 @@ const syntheticTransfers = new WeakSet<DataTransfer>();
 
 let enabledForHost = true;
 const currentHost = window.location.hostname;
+
+let heavyPromise: Promise<HeavyModule> | null = null;
+
+// pdf-lib en jszip zitten in een losse bundle die we pas ophalen wanneer er
+// echt een PDF of DOCX langskomt. Daardoor blijft content.js klein op pagina's
+// waar je nooit een bestand plakt.
+function loadHeavy(): Promise<HeavyModule> {
+  if (!heavyPromise) {
+    const url = runtimeGetURL("dist/heavy.js");
+    heavyPromise = import(url) as Promise<HeavyModule>;
+  }
+  return heavyPromise;
+}
 
 async function getDisabledHosts(): Promise<DisabledHosts> {
   const result = await storageLocalGet([STORAGE_KEY]);
@@ -43,10 +63,8 @@ function showBanner(message: string, type: "error" | "info" = "info"): void {
     banner.style.zIndex = "2147483647";
     banner.style.maxWidth = "480px";
     banner.style.padding = "10px 12px";
-    banner.style.borderRadius = "8px";
     banner.style.font = "12px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
     banner.style.boxShadow = "0 6px 18px rgba(0,0,0,0.2)";
-    banner.style.background = "#111";
     banner.style.color = "#fff";
     document.documentElement.appendChild(banner);
   }
@@ -79,6 +97,11 @@ function isMp3File(file: File): boolean {
 
 function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
+}
+
+function isHeicFile(file: File): boolean {
+  if (file.type === "image/heic" || file.type === "image/heif") return true;
+  return /\.(heic|heif)$/i.test(file.name);
 }
 
 interface CategorizedFiles {
@@ -125,8 +148,6 @@ function getExtensionForMime(mime: string): string {
     case "image/webp": return "webp";
     case "image/gif": return "gif";
     case "image/bmp": return "bmp";
-    case "application/pdf": return "pdf";
-    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": return "docx";
     case "video/mp4": return "mp4";
     case "audio/mpeg": return "mp3";
     default: return "png";
@@ -140,17 +161,6 @@ function safeFilename(originalName: string | undefined, mime: string): string {
   return `sanitized-${stamp}.${ext}`;
 }
 
-function drawWatermark(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
-  if (!SHOW_WATERMARK) return;
-  ctx.save();
-  ctx.globalAlpha = 0.18;
-  ctx.font = "10px Arial, sans-serif";
-  ctx.fillStyle = "#000";
-  ctx.textBaseline = "top";
-  ctx.fillText("sanitized", 6, 4);
-  ctx.restore();
-}
-
 async function imageToBlob(bitmap: ImageBitmap, mime: string): Promise<Blob> {
   const width = bitmap.width;
   const height = bitmap.height;
@@ -161,7 +171,6 @@ async function imageToBlob(bitmap: ImageBitmap, mime: string): Promise<Blob> {
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) throw new Error("No 2d context");
     ctx.drawImage(bitmap, 0, 0);
-    drawWatermark(ctx);
     return canvas.convertToBlob({ type: mime || "image/png", quality });
   }
 
@@ -171,7 +180,6 @@ async function imageToBlob(bitmap: ImageBitmap, mime: string): Promise<Blob> {
   const ctx = canvas.getContext("2d", { alpha: true });
   if (!ctx) throw new Error("No 2d context");
   ctx.drawImage(bitmap, 0, 0);
-  drawWatermark(ctx);
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(
@@ -192,79 +200,13 @@ async function sanitizeImage(file: File): Promise<File> {
   });
 }
 
-function stripPdfMetadata(pdfDoc: PDFDocument): void {
-  const anyDoc = pdfDoc as unknown as {
-    catalog?: { delete?: (name: PDFName) => void };
-    context?: {
-      trailerInfo?: { Info?: unknown; ID?: unknown };
-      lookup?: (ref: unknown) => unknown;
-    };
-  };
-
-  try {
-    anyDoc.catalog?.delete?.(PDFName.of("Metadata"));
-  } catch {
-    // niet kritisch, ga door
-  }
-
-  const trailerInfo = anyDoc.context?.trailerInfo;
-  if (trailerInfo) {
-    const infoRef = trailerInfo.Info;
-    if (infoRef && anyDoc.context?.lookup) {
-      const infoDict = anyDoc.context.lookup(infoRef) as {
-        keys?: () => PDFName[];
-        delete?: (key: PDFName) => void;
-      };
-      const keys = infoDict?.keys?.() || [];
-      for (const key of keys) infoDict?.delete?.(key);
-    }
-    trailerInfo.Info = undefined;
-    trailerInfo.ID = undefined;
-  }
-}
-
-async function sanitizePdf(file: File): Promise<File> {
-  const bytes = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(bytes, {
-    updateMetadata: false,
-    ignoreEncryption: true
-  });
-  stripPdfMetadata(pdfDoc);
-  const pdfBytes = await pdfDoc.save();
-  return new File([pdfBytes], safeFilename(file.name, "application/pdf"), {
-    type: "application/pdf",
-    lastModified: Date.now()
-  });
-}
-
-async function sanitizeDocx(file: File): Promise<File> {
-  const bytes = await file.arrayBuffer();
-  const zip = await JSZip.loadAsync(bytes);
-  zip.comment = "";
-  for (const path of Object.keys(zip.files)) {
-    if (path.startsWith("docProps/")) {
-      zip.remove(path);
-      continue;
-    }
-    const entry = zip.files[path];
-    entry.date = new Date(0);
-    entry.comment = "";
-    entry.unixPermissions = null;
-    entry.dosPermissions = null;
-  }
-  const outBytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
-  const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  return new File([outBytes], safeFilename(file.name, docxMime), {
-    type: docxMime,
-    lastModified: Date.now()
-  });
-}
-
 const MP4_CONTAINER_BOXES = new Set([
   "moov", "trak", "mdia", "minf", "stbl", "edts", "dinf", "mvex", "moof", "traf", "mfra"
 ]);
 
-const MP4_STRIP_BOXES = new Set(["udta", "meta", "ilst"]);
+// udta/meta/ilst dragen tags. uuid is vendor-metadata (GoPro, Garmin, iPhone)
+// en daar zit vaak locatie in.
+const MP4_STRIP_BOXES = new Set(["udta", "meta", "ilst", "uuid"]);
 
 function readFourCC(view: DataView, offset: number): string {
   return String.fromCharCode(
@@ -296,6 +238,48 @@ function concatChunks(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
+interface BoxSpan {
+  type: string;
+  contentStart: number;
+  boxEnd: number;
+}
+
+// Loopt één niveau diep door de boxes tussen start en end.
+function* iterBoxes(view: DataView, start: number, end: number): Generator<BoxSpan> {
+  let pos = start;
+  while (pos + 8 <= end) {
+    let size = view.getUint32(pos);
+    const type = readFourCC(view, pos + 4);
+    let headerSize = 8;
+    if (size === 1) {
+      if (pos + 16 > end) break;
+      const hi = view.getUint32(pos + 8);
+      const lo = view.getUint32(pos + 12);
+      size = Number((BigInt(hi) << 32n) + BigInt(lo));
+      headerSize = 16;
+    } else if (size === 0) {
+      size = end - pos;
+    }
+    if (size < headerSize || pos + size > end) break;
+    yield { type, contentStart: pos + headerSize, boxEnd: pos + size };
+    pos += size;
+  }
+}
+
+// Leest het handler-type van een trak via trak > mdia > hdlr. Een trak met
+// handler "meta" is een timed-metadata-track (iPhone bewaart daar GPS in).
+function trakHandlerType(view: DataView, contentStart: number, contentEnd: number): string | null {
+  for (const mdia of iterBoxes(view, contentStart, contentEnd)) {
+    if (mdia.type !== "mdia") continue;
+    for (const hdlr of iterBoxes(view, mdia.contentStart, mdia.boxEnd)) {
+      if (hdlr.type !== "hdlr") continue;
+      // hdlr: version+flags (4) + pre_defined (4) + handler_type (4)
+      return readFourCC(view, hdlr.contentStart + 8);
+    }
+  }
+  return null;
+}
+
 function parseMp4Boxes(bytes: Uint8Array, start: number, end: number): Uint8Array[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const chunks: Uint8Array[] = [];
@@ -319,6 +303,12 @@ function parseMp4Boxes(bytes: Uint8Array, start: number, end: number): Uint8Arra
 
     const boxEnd = pos + size;
     if (MP4_STRIP_BOXES.has(type)) {
+      pos = boxEnd;
+      continue;
+    }
+
+    // Hele metadata-track droppen (daar zit de GPS-track van telefoons in).
+    if (type === "trak" && trakHandlerType(view, pos + headerSize, boxEnd) === "meta") {
       pos = boxEnd;
       continue;
     }
@@ -417,15 +407,46 @@ async function sanitizeMp3(file: File): Promise<File> {
   });
 }
 
-async function sanitizeCategorized(c: CategorizedFiles): Promise<File[]> {
-  const [images, pdfs, docx, mp4, mp3] = await Promise.all([
-    Promise.all(c.images.map(sanitizeImage)),
-    Promise.all(c.pdfs.map(sanitizePdf)),
-    Promise.all(c.docx.map(sanitizeDocx)),
-    Promise.all(c.mp4.map(sanitizeMp4)),
-    Promise.all(c.mp3.map(sanitizeMp3))
-  ]);
-  return [...images, ...pdfs, ...docx, ...mp4, ...mp3];
+interface SanitizeOutcome {
+  files: File[];
+  failures: string[];
+}
+
+// Schoont elk bestand los van de rest. Eén bestand dat faalt (bv. een HEIC die
+// de browser niet kan decoderen) blokkeert de andere niet.
+async function sanitizeAll(c: CategorizedFiles): Promise<SanitizeOutcome> {
+  const jobs: Promise<{ file: File } | { error: string }>[] = [];
+
+  const run = (file: File, work: () => Promise<File>) =>
+    jobs.push(
+      work().then(
+        (f) => ({ file: f }),
+        () => ({
+          error: isHeicFile(file)
+            ? `${file.name || "HEIC"}: HEIC kan de browser niet schonen, geblokkeerd`
+            : `${file.name || "bestand"}: schonen mislukt, geblokkeerd`
+        })
+      )
+    );
+
+  for (const f of c.images) run(f, () => sanitizeImage(f));
+  for (const f of c.mp4) run(f, () => sanitizeMp4(f));
+  for (const f of c.mp3) run(f, () => sanitizeMp3(f));
+
+  if (c.pdfs.length || c.docx.length) {
+    const heavy = loadHeavy();
+    for (const f of c.pdfs) run(f, async () => (await heavy).sanitizePdf(f));
+    for (const f of c.docx) run(f, async () => (await heavy).sanitizeDocx(f));
+  }
+
+  const results = await Promise.all(jobs);
+  const files: File[] = [];
+  const failures: string[] = [];
+  for (const r of results) {
+    if ("file" in r) files.push(r.file);
+    else failures.push(r.error);
+  }
+  return { files, failures };
 }
 
 function setInputFiles(input: HTMLInputElement, files: File[]): void {
@@ -491,6 +512,13 @@ function deliverFiles(
     : tryDispatchDrop(target, files);
 }
 
+function reportFailures(failures: string[]): void {
+  if (!failures.length) return;
+  const head = failures.slice(0, 3).join(" | ");
+  const extra = failures.length > 3 ? ` (+${failures.length - 3})` : "";
+  showBanner(`K00 Sanitizer: ${head}${extra}`, "error");
+}
+
 document.addEventListener(
   "paste",
   async (event) => {
@@ -503,16 +531,12 @@ document.addEventListener(
     event.preventDefault();
     event.stopImmediatePropagation();
 
-    try {
-      const sanitized = await sanitizeCategorized(cat);
-      await incrementSanitizedCount(sanitized.length);
+    const { files, failures } = await sanitizeAll(cat);
+    await incrementSanitizedCount(files.length);
+    reportFailures(failures);
 
-      const ok = deliverFiles(event.target, sanitized, "paste");
-      if (!ok) {
-        showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
-      }
-    } catch {
-      showBanner("K00 Sanitizer: paste geblokkeerd (sanitizen mislukt).", "error");
+    if (files.length && !deliverFiles(event.target, files, "paste")) {
+      showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
     }
   },
   true
@@ -531,18 +555,14 @@ document.addEventListener(
     event.preventDefault();
     event.stopImmediatePropagation();
 
-    try {
-      const sanitized = await sanitizeCategorized(cat);
-      await incrementSanitizedCount(sanitized.length);
+    const { files, failures } = await sanitizeAll(cat);
+    await incrementSanitizedCount(files.length);
+    reportFailures(failures);
 
-      // Niet-herkende bestanden gaan ongewijzigd mee.
-      const combined = [...cat.other, ...sanitized];
-      const ok = deliverFiles(event.target, combined, "drop");
-      if (!ok) {
-        showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
-      }
-    } catch {
-      showBanner("K00 Sanitizer: drop geblokkeerd (sanitizen mislukt).", "error");
+    // Niet-herkende bestanden gaan ongewijzigd mee.
+    const combined = [...cat.other, ...files];
+    if (combined.length && !deliverFiles(event.target, combined, "drop")) {
+      showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
     }
   },
   true
@@ -561,12 +581,10 @@ document.addEventListener(
 
     processingInputs.add(target);
     try {
-      const sanitized = await sanitizeCategorized(cat);
-      await incrementSanitizedCount(sanitized.length);
-      setInputFiles(target, [...cat.other, ...sanitized]);
-    } catch {
-      target.value = "";
-      showBanner("K00 Sanitizer: upload geblokkeerd (sanitizen mislukt).", "error");
+      const { files, failures } = await sanitizeAll(cat);
+      await incrementSanitizedCount(files.length);
+      reportFailures(failures);
+      setInputFiles(target, [...cat.other, ...files]);
     } finally {
       processingInputs.delete(target);
     }

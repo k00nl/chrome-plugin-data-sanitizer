@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "esbuild src/content.ts src/popup.ts --bundle --outdir=dist --target=es2020 --format=iife"
+    "build": "esbuild src/content.ts src/popup.ts --bundle --outdir=dist --target=es2020 --format=iife && esbuild src/heavy.ts --bundle --outdir=dist --target=es2020 --format=esm"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

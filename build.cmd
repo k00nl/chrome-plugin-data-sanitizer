@@ -20,6 +20,7 @@ copy /y popup.html      "%STAGE%\"        >nul || goto :error
 copy /y popup.css       "%STAGE%\"        >nul || goto :error
 copy /y dist\content.js "%STAGE%\dist\"   >nul || goto :error
 copy /y dist\popup.js   "%STAGE%\dist\"   >nul || goto :error
+copy /y dist\heavy.js   "%STAGE%\dist\"   >nul || goto :error
 copy /y icons\*.png     "%STAGE%\icons\"  >nul || goto :error
 
 echo [4/4] Zippen...

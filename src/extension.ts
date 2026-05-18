@@ -37,3 +37,8 @@ export function storageOnChangedAddListener(
   ext.storage.onChanged.addListener(listener);
 }
 
+export function runtimeGetURL(path: string): string {
+  if (ext?.runtime?.getURL) return ext.runtime.getURL(path) as string;
+  return path;
+}
+
