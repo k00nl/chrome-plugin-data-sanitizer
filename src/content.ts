@@ -7,7 +7,7 @@ type DisabledHosts = Record<string, true>;
 const STORAGE_KEY = "disabledHosts";
 const COUNT_KEY = "sanitizedCount";
 const SHOW_WATERMARK = true;
-const BANNER_ID = "__image_sanitizer_banner__";
+const BANNER_ID = "__k00_sanitizer_banner__";
 
 const processingInputs = new WeakSet<HTMLInputElement>();
 const syntheticTransfers = new WeakSet<DataTransfer>();
@@ -204,7 +204,7 @@ function stripPdfMetadata(pdfDoc: PDFDocument): void {
   try {
     anyDoc.catalog?.delete?.(PDFName.of("Metadata"));
   } catch {
-    // best effort
+    // niet kritisch, ga door
   }
 
   const trailerInfo = anyDoc.context?.trailerInfo;

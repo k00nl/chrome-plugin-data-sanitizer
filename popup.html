@@ -7,44 +7,40 @@
     <title>K00 Sanitizer</title>
   </head>
   <body>
-    <header class="header">
-      <img class="logo logo-light" src="icons/k00_logo_light.png" alt="K00" />
-      <img class="logo logo-dark" src="icons/k00_logo_dark.png" alt="K00" />
+    <header class="brand">
+      <span class="wordmark">K00.</span>
+      <span class="brand-tag">// sanitizer</span>
     </header>
 
-    <section class="card">
-      <div class="metric">
-        <div class="metric-label">Files sanitized</div>
-        <div id="count" class="metric-value">0</div>
+    <div class="block">
+      <span class="block-label">Files sanitized</span>
+      <span id="count" class="stat">0</span>
+    </div>
+
+    <div class="block">
+      <span class="block-label">Current site</span>
+      <span id="host" class="mono-value"></span>
+    </div>
+
+    <div class="setting">
+      <div class="setting-text">
+        <div class="setting-title">Sanitize on this site</div>
+        <div class="setting-sub">Strips metadata from paste, drop and upload.</div>
       </div>
+      <label class="switch">
+        <input id="toggle" type="checkbox" />
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </label>
+    </div>
 
-      <div class="row">
-        <div class="row-label">Current site</div>
-        <div id="host" class="row-value"></div>
-      </div>
+    <div id="status" class="status"></div>
 
-      <div class="toggle-row">
-        <label class="switch">
-          <input id="toggle" type="checkbox" />
-          <span class="slider"></span>
-        </label>
-        <div class="toggle-text">
-          <div class="toggle-title">Sanitize on this site</div>
-          <div class="toggle-sub">Strips metadata from paste, drop and upload.</div>
-        </div>
-      </div>
+    <div class="block formats">
+      <span class="block-label">Supported formats</span>
+      <span class="mono-value">JPG PNG WEBP GIF BMP PDF DOCX MP4 MP3</span>
+    </div>
 
-      <div id="status" class="status"></div>
-    </section>
-
-    <section class="card formats">
-      <div class="formats-label">Supported formats</div>
-      <div class="formats-list">JPG · PNG · WEBP · GIF · BMP · PDF · DOCX · MP4 · MP3</div>
-    </section>
-
-    <div class="forge-bar"></div>
-
-    <a class="link" href="https://k00.nl" target="_blank" rel="noreferrer">k00.nl</a>
+    <a class="ghost-button" href="https://k00.nl" target="_blank" rel="noreferrer">k00.nl</a>
     <script src="dist/popup.js"></script>
   </body>
 </html>

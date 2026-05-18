@@ -22038,7 +22038,7 @@
   var STORAGE_KEY = "disabledHosts";
   var COUNT_KEY = "sanitizedCount";
   var SHOW_WATERMARK = true;
-  var BANNER_ID = "__image_sanitizer_banner__";
+  var BANNER_ID = "__k00_sanitizer_banner__";
   var processingInputs = /* @__PURE__ */ new WeakSet();
   var syntheticTransfers = /* @__PURE__ */ new WeakSet();
   var enabledForHost = true;
