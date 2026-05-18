@@ -2,7 +2,8 @@ import {
   storageLocalGet,
   storageLocalSet,
   storageOnChangedAddListener,
-  tabsQuery
+  tabsQuery,
+  tabsSendMessage
 } from "./extension";
 
 type DisabledHosts = Record<string, true>;
@@ -48,6 +49,7 @@ async function init(): Promise<void> {
   setCount(Number(countResult[COUNT_KEY] || 0));
 
   const tab = await getActiveTab();
+  const tabId = tab?.id;
   const url = tab?.url ? new URL(tab.url) : null;
   if (!url || !url.hostname) {
     hostEl.textContent = "Unavailable";
@@ -65,6 +67,13 @@ async function init(): Promise<void> {
 
   toggle.addEventListener("change", async () => {
     await setHostEnabled(host, toggle.checked);
+    if (typeof tabId === "number") {
+      await tabsSendMessage(tabId, {
+        type: "k00:setEnabled",
+        host,
+        enabled: toggle.checked
+      });
+    }
     setStatus(toggle.checked ? "Sanitizing enabled." : "Sanitizing disabled.");
   });
 }

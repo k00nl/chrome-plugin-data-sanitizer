@@ -3,30 +3,92 @@
   // src/extension.ts
   var ext = globalThis.browser || globalThis.chrome;
   var useBrowser = typeof globalThis.browser !== "undefined";
+  function isExtensionContextValid() {
+    try {
+      return !!ext?.runtime?.id;
+    } catch {
+      return false;
+    }
+  }
   function storageLocalGet(keys) {
-    if (!ext?.storage?.local?.get) return Promise.resolve({});
-    if (useBrowser) return ext.storage.local.get(keys);
-    return new Promise((resolve) => {
-      ext.storage.local.get(keys, (result) => resolve(result));
-    });
+    if (!isExtensionContextValid() || !ext?.storage?.local?.get) {
+      return Promise.resolve({});
+    }
+    try {
+      if (useBrowser) {
+        return ext.storage.local.get(keys).catch(
+          () => ({})
+        );
+      }
+      return new Promise((resolve) => {
+        ext.storage.local.get(keys, (result) => {
+          void ext.runtime?.lastError;
+          resolve(result || {});
+        });
+      });
+    } catch {
+      return Promise.resolve({});
+    }
   }
   function storageLocalSet(items) {
-    if (!ext?.storage?.local?.set) return Promise.resolve();
-    if (useBrowser) return ext.storage.local.set(items);
-    return new Promise((resolve) => {
-      ext.storage.local.set(items, () => resolve());
-    });
+    if (!isExtensionContextValid() || !ext?.storage?.local?.set) {
+      return Promise.resolve();
+    }
+    try {
+      if (useBrowser) {
+        return ext.storage.local.set(items).catch(() => void 0);
+      }
+      return new Promise((resolve) => {
+        ext.storage.local.set(items, () => {
+          void ext.runtime?.lastError;
+          resolve();
+        });
+      });
+    } catch {
+      return Promise.resolve();
+    }
   }
   function tabsQuery(query) {
-    if (!ext?.tabs?.query) return Promise.resolve([]);
-    if (useBrowser) return ext.tabs.query(query);
-    return new Promise((resolve) => {
-      ext.tabs.query(query, (tabs) => resolve(tabs));
-    });
+    if (!isExtensionContextValid() || !ext?.tabs?.query) return Promise.resolve([]);
+    try {
+      if (useBrowser) {
+        return ext.tabs.query(query).catch(() => []);
+      }
+      return new Promise((resolve) => {
+        ext.tabs.query(query, (tabs) => {
+          void ext.runtime?.lastError;
+          resolve(tabs || []);
+        });
+      });
+    } catch {
+      return Promise.resolve([]);
+    }
+  }
+  function tabsSendMessage(tabId, message) {
+    if (!isExtensionContextValid() || !ext?.tabs?.sendMessage) return Promise.resolve();
+    try {
+      if (useBrowser) {
+        return Promise.resolve(ext.tabs.sendMessage(tabId, message)).then(
+          () => void 0,
+          () => void 0
+        );
+      }
+      return new Promise((resolve) => {
+        ext.tabs.sendMessage(tabId, message, () => {
+          void ext.runtime?.lastError;
+          resolve();
+        });
+      });
+    } catch {
+      return Promise.resolve();
+    }
   }
   function storageOnChangedAddListener(listener) {
-    if (!ext?.storage?.onChanged?.addListener) return;
-    ext.storage.onChanged.addListener(listener);
+    if (!isExtensionContextValid() || !ext?.storage?.onChanged?.addListener) return;
+    try {
+      ext.storage.onChanged.addListener(listener);
+    } catch {
+    }
   }
 
   // src/popup.ts
@@ -64,6 +126,7 @@
     const countResult = await storageLocalGet([COUNT_KEY]);
     setCount(Number(countResult[COUNT_KEY] || 0));
     const tab = await getActiveTab();
+    const tabId = tab?.id;
     const url = tab?.url ? new URL(tab.url) : null;
     if (!url || !url.hostname) {
       hostEl.textContent = "Unavailable";
@@ -78,6 +141,13 @@
     toggle.checked = enabled;
     toggle.addEventListener("change", async () => {
       await setHostEnabled(host, toggle.checked);
+      if (typeof tabId === "number") {
+        await tabsSendMessage(tabId, {
+          type: "k00:setEnabled",
+          host,
+          enabled: toggle.checked
+        });
+      }
       setStatus(toggle.checked ? "Sanitizing enabled." : "Sanitizing disabled.");
     });
   }

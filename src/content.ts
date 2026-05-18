@@ -1,5 +1,7 @@
 import {
+  isExtensionContextValid,
   runtimeGetURL,
+  runtimeOnMessageAddListener,
   storageLocalGet,
   storageLocalSet,
   storageOnChangedAddListener
@@ -519,79 +521,94 @@ function reportFailures(failures: string[]): void {
   showBanner(`K00 Sanitizer: ${head}${extra}`, "error");
 }
 
-document.addEventListener(
-  "paste",
-  async (event) => {
-    if (!enabledForHost) return;
-    if (event.clipboardData && syntheticTransfers.has(event.clipboardData)) return;
+// Een verouderd content-script (na een extensie-update of -herlaad) heeft een
+// ongeldige context. Dan halen we onze listeners weg zodat de pagina gewoon
+// z'n eigen paste/drop doet tot de tab ververst wordt.
+function teardown(): void {
+  document.removeEventListener("paste", onPaste, true);
+  document.removeEventListener("drop", onDrop, true);
+  document.removeEventListener("change", onChange, true);
+}
 
-    const cat = categorizeFiles(filesFromClipboard(event.clipboardData?.items || null));
-    if (!totalSanitizableCount(cat)) return;
+function stale(): boolean {
+  if (isExtensionContextValid()) return false;
+  teardown();
+  return true;
+}
 
-    event.preventDefault();
-    event.stopImmediatePropagation();
+async function onPaste(event: ClipboardEvent): Promise<void> {
+  if (stale() || !enabledForHost) return;
+  if (event.clipboardData && syntheticTransfers.has(event.clipboardData)) return;
 
+  const cat = categorizeFiles(filesFromClipboard(event.clipboardData?.items || null));
+  if (!totalSanitizableCount(cat)) return;
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+
+  const { files, failures } = await sanitizeAll(cat);
+  await incrementSanitizedCount(files.length);
+  reportFailures(failures);
+
+  if (files.length && !deliverFiles(event.target, files, "paste")) {
+    showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
+  }
+}
+
+async function onDrop(event: DragEvent): Promise<void> {
+  if (stale() || !enabledForHost) return;
+  if (event.dataTransfer && syntheticTransfers.has(event.dataTransfer)) return;
+
+  const allFiles = Array.from(event.dataTransfer?.files || []);
+  const cat = categorizeFiles(allFiles);
+  if (!totalSanitizableCount(cat)) return;
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+
+  const { files, failures } = await sanitizeAll(cat);
+  await incrementSanitizedCount(files.length);
+  reportFailures(failures);
+
+  // Niet-herkende bestanden gaan ongewijzigd mee.
+  const combined = [...cat.other, ...files];
+  if (combined.length && !deliverFiles(event.target, combined, "drop")) {
+    showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
+  }
+}
+
+async function onChange(event: Event): Promise<void> {
+  if (stale() || !enabledForHost) return;
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
+  if (processingInputs.has(target)) return;
+
+  const cat = categorizeFiles(Array.from(target.files || []));
+  if (!totalSanitizableCount(cat)) return;
+
+  processingInputs.add(target);
+  try {
     const { files, failures } = await sanitizeAll(cat);
     await incrementSanitizedCount(files.length);
     reportFailures(failures);
+    setInputFiles(target, [...cat.other, ...files]);
+  } finally {
+    processingInputs.delete(target);
+  }
+}
 
-    if (files.length && !deliverFiles(event.target, files, "paste")) {
-      showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
-    }
-  },
-  true
-);
+document.addEventListener("paste", onPaste, true);
+document.addEventListener("drop", onDrop, true);
+document.addEventListener("change", onChange, true);
 
-document.addEventListener(
-  "drop",
-  async (event) => {
-    if (!enabledForHost) return;
-    if (event.dataTransfer && syntheticTransfers.has(event.dataTransfer)) return;
+// De popup stuurt dit bij het togglen zodat het meteen werkt, zonder refresh.
+runtimeOnMessageAddListener((message) => {
+  if (message?.type !== "k00:setEnabled") return;
+  if (typeof message.host === "string" && message.host !== currentHost) return;
+  enabledForHost = message.enabled !== false;
+});
 
-    const allFiles = Array.from(event.dataTransfer?.files || []);
-    const cat = categorizeFiles(allFiles);
-    if (!totalSanitizableCount(cat)) return;
-
-    event.preventDefault();
-    event.stopImmediatePropagation();
-
-    const { files, failures } = await sanitizeAll(cat);
-    await incrementSanitizedCount(files.length);
-    reportFailures(failures);
-
-    // Niet-herkende bestanden gaan ongewijzigd mee.
-    const combined = [...cat.other, ...files];
-    if (combined.length && !deliverFiles(event.target, combined, "drop")) {
-      showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
-    }
-  },
-  true
-);
-
-document.addEventListener(
-  "change",
-  async (event) => {
-    if (!enabledForHost) return;
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
-    if (processingInputs.has(target)) return;
-
-    const cat = categorizeFiles(Array.from(target.files || []));
-    if (!totalSanitizableCount(cat)) return;
-
-    processingInputs.add(target);
-    try {
-      const { files, failures } = await sanitizeAll(cat);
-      await incrementSanitizedCount(files.length);
-      reportFailures(failures);
-      setInputFiles(target, [...cat.other, ...files]);
-    } finally {
-      processingInputs.delete(target);
-    }
-  },
-  true
-);
-
+// Fallback: andere open tabs van dezelfde host pikken het via storage op.
 storageOnChangedAddListener((changes, area) => {
   if (area !== "local") return;
   if (changes[STORAGE_KEY]) updateEnabledState().catch(() => undefined);

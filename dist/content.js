@@ -3,26 +3,73 @@
   // src/extension.ts
   var ext = globalThis.browser || globalThis.chrome;
   var useBrowser = typeof globalThis.browser !== "undefined";
+  function isExtensionContextValid() {
+    try {
+      return !!ext?.runtime?.id;
+    } catch {
+      return false;
+    }
+  }
   function storageLocalGet(keys) {
-    if (!ext?.storage?.local?.get) return Promise.resolve({});
-    if (useBrowser) return ext.storage.local.get(keys);
-    return new Promise((resolve) => {
-      ext.storage.local.get(keys, (result) => resolve(result));
-    });
+    if (!isExtensionContextValid() || !ext?.storage?.local?.get) {
+      return Promise.resolve({});
+    }
+    try {
+      if (useBrowser) {
+        return ext.storage.local.get(keys).catch(
+          () => ({})
+        );
+      }
+      return new Promise((resolve) => {
+        ext.storage.local.get(keys, (result) => {
+          void ext.runtime?.lastError;
+          resolve(result || {});
+        });
+      });
+    } catch {
+      return Promise.resolve({});
+    }
   }
   function storageLocalSet(items) {
-    if (!ext?.storage?.local?.set) return Promise.resolve();
-    if (useBrowser) return ext.storage.local.set(items);
-    return new Promise((resolve) => {
-      ext.storage.local.set(items, () => resolve());
-    });
+    if (!isExtensionContextValid() || !ext?.storage?.local?.set) {
+      return Promise.resolve();
+    }
+    try {
+      if (useBrowser) {
+        return ext.storage.local.set(items).catch(() => void 0);
+      }
+      return new Promise((resolve) => {
+        ext.storage.local.set(items, () => {
+          void ext.runtime?.lastError;
+          resolve();
+        });
+      });
+    } catch {
+      return Promise.resolve();
+    }
+  }
+  function runtimeOnMessageAddListener(listener) {
+    if (!isExtensionContextValid() || !ext?.runtime?.onMessage?.addListener) return;
+    try {
+      ext.runtime.onMessage.addListener((message) => {
+        listener(message);
+        return void 0;
+      });
+    } catch {
+    }
   }
   function storageOnChangedAddListener(listener) {
-    if (!ext?.storage?.onChanged?.addListener) return;
-    ext.storage.onChanged.addListener(listener);
+    if (!isExtensionContextValid() || !ext?.storage?.onChanged?.addListener) return;
+    try {
+      ext.storage.onChanged.addListener(listener);
+    } catch {
+    }
   }
   function runtimeGetURL(path) {
-    if (ext?.runtime?.getURL) return ext.runtime.getURL(path);
+    try {
+      if (ext?.runtime?.getURL) return ext.runtime.getURL(path);
+    } catch {
+    }
     return path;
   }
 
@@ -437,65 +484,71 @@
     const extra = failures.length > 3 ? ` (+${failures.length - 3})` : "";
     showBanner(`K00 Sanitizer: ${head}${extra}`, "error");
   }
-  document.addEventListener(
-    "paste",
-    async (event) => {
-      if (!enabledForHost) return;
-      if (event.clipboardData && syntheticTransfers.has(event.clipboardData)) return;
-      const cat = categorizeFiles(filesFromClipboard(event.clipboardData?.items || null));
-      if (!totalSanitizableCount(cat)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
+  function teardown() {
+    document.removeEventListener("paste", onPaste, true);
+    document.removeEventListener("drop", onDrop, true);
+    document.removeEventListener("change", onChange, true);
+  }
+  function stale() {
+    if (isExtensionContextValid()) return false;
+    teardown();
+    return true;
+  }
+  async function onPaste(event) {
+    if (stale() || !enabledForHost) return;
+    if (event.clipboardData && syntheticTransfers.has(event.clipboardData)) return;
+    const cat = categorizeFiles(filesFromClipboard(event.clipboardData?.items || null));
+    if (!totalSanitizableCount(cat)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const { files, failures } = await sanitizeAll(cat);
+    await incrementSanitizedCount(files.length);
+    reportFailures(failures);
+    if (files.length && !deliverFiles(event.target, files, "paste")) {
+      showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
+    }
+  }
+  async function onDrop(event) {
+    if (stale() || !enabledForHost) return;
+    if (event.dataTransfer && syntheticTransfers.has(event.dataTransfer)) return;
+    const allFiles = Array.from(event.dataTransfer?.files || []);
+    const cat = categorizeFiles(allFiles);
+    if (!totalSanitizableCount(cat)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const { files, failures } = await sanitizeAll(cat);
+    await incrementSanitizedCount(files.length);
+    reportFailures(failures);
+    const combined = [...cat.other, ...files];
+    if (combined.length && !deliverFiles(event.target, combined, "drop")) {
+      showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
+    }
+  }
+  async function onChange(event) {
+    if (stale() || !enabledForHost) return;
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
+    if (processingInputs.has(target)) return;
+    const cat = categorizeFiles(Array.from(target.files || []));
+    if (!totalSanitizableCount(cat)) return;
+    processingInputs.add(target);
+    try {
       const { files, failures } = await sanitizeAll(cat);
       await incrementSanitizedCount(files.length);
       reportFailures(failures);
-      if (files.length && !deliverFiles(event.target, files, "paste")) {
-        showBanner("K00 Sanitizer: paste geblokkeerd (kon schone versie niet plaatsen).", "error");
-      }
-    },
-    true
-  );
-  document.addEventListener(
-    "drop",
-    async (event) => {
-      if (!enabledForHost) return;
-      if (event.dataTransfer && syntheticTransfers.has(event.dataTransfer)) return;
-      const allFiles = Array.from(event.dataTransfer?.files || []);
-      const cat = categorizeFiles(allFiles);
-      if (!totalSanitizableCount(cat)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const { files, failures } = await sanitizeAll(cat);
-      await incrementSanitizedCount(files.length);
-      reportFailures(failures);
-      const combined = [...cat.other, ...files];
-      if (combined.length && !deliverFiles(event.target, combined, "drop")) {
-        showBanner("K00 Sanitizer: drop geblokkeerd (kon schone versie niet plaatsen).", "error");
-      }
-    },
-    true
-  );
-  document.addEventListener(
-    "change",
-    async (event) => {
-      if (!enabledForHost) return;
-      const target = event.target;
-      if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
-      if (processingInputs.has(target)) return;
-      const cat = categorizeFiles(Array.from(target.files || []));
-      if (!totalSanitizableCount(cat)) return;
-      processingInputs.add(target);
-      try {
-        const { files, failures } = await sanitizeAll(cat);
-        await incrementSanitizedCount(files.length);
-        reportFailures(failures);
-        setInputFiles(target, [...cat.other, ...files]);
-      } finally {
-        processingInputs.delete(target);
-      }
-    },
-    true
-  );
+      setInputFiles(target, [...cat.other, ...files]);
+    } finally {
+      processingInputs.delete(target);
+    }
+  }
+  document.addEventListener("paste", onPaste, true);
+  document.addEventListener("drop", onDrop, true);
+  document.addEventListener("change", onChange, true);
+  runtimeOnMessageAddListener((message) => {
+    if (message?.type !== "k00:setEnabled") return;
+    if (typeof message.host === "string" && message.host !== currentHost) return;
+    enabledForHost = message.enabled !== false;
+  });
   storageOnChangedAddListener((changes, area) => {
     if (area !== "local") return;
     if (changes[STORAGE_KEY]) updateEnabledState().catch(() => void 0);
